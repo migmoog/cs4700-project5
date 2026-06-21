@@ -43,7 +43,10 @@ impl RequestBuilder {
         self
     }
 
-    pub async fn send(&self, socket: &mut TcpStream) -> Result<Response> {
+    pub async fn send<T>(&self, socket: &mut T) -> Result<Response>
+    where
+        T: AsyncReadExt + AsyncWriteExt + Unpin,
+    {
         let s = self.to_string();
         socket.write_all(s.as_bytes()).await?;
 
@@ -57,7 +60,7 @@ impl RequestBuilder {
 
 impl ToString for RequestBuilder {
     fn to_string(&self) -> String {
-        let mut out = format!("{} {} HTTP/1.1", self.method.to_string(), self.path);
+        let mut out = format!("{} {} HTTP/1.1{CRLF}", self.method.to_string(), self.path);
         // add headers
         for (k, v) in self.headers.iter() {
             out.push_str(k);
