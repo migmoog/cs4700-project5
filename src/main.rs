@@ -36,7 +36,7 @@ where
     let login_res = RequestBuilder::new(Method::Get, "/accounts/login/".to_string())
         .header("Host", host)
         .send(&mut socket).await?;
-    eprintln!("{:?}", login_res);
+    eprintln!("{:#?}", login_res);
     Ok(())
 }
 

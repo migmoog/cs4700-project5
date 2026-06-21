@@ -51,10 +51,25 @@ impl RequestBuilder {
         socket.write_all(s.as_bytes()).await?;
 
         let mut response_buffer = Vec::with_capacity(2048);
-        socket.read_buf(&mut response_buffer).await?;
-        Response::try_from(
-            str::from_utf8(&response_buffer).expect("Should be a valid ascii sequence"),
-        )
+        let bytes_read = socket.read_buf(&mut response_buffer).await?;
+        let mut r = Response::try_from(
+            str::from_utf8(&response_buffer[..bytes_read]).expect("Should be a valid ascii sequence"),
+        )?;
+
+        if let Some(len) = r.content_length() {
+            let mut content = Vec::with_capacity(len);
+            let bytes_read = socket.read_buf(&mut content).await?;
+            if bytes_read == 0 {
+                eprintln!("Damn bro... no bytes...");
+            }
+            else {
+                let result = String::from_utf8(content);
+                eprintln!("Got bytes {:?}", result);
+                r.body = result.ok();
+            }
+        }
+
+        Ok(r)
     }
 }
 
@@ -89,6 +104,14 @@ impl<'a> TryFrom<&'a str> for Response {
             http_response(value).map_err(|e| anyhow!("Couldn't parse http response: {e}"))?;
 
         Ok(r)
+    }
+}
+
+impl Response {
+    pub fn content_length(&self) -> Option<usize> {
+        let v = self.headers.get("content-length")?;
+
+        v.parse().ok()
     }
 }
 
