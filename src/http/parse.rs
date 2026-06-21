@@ -9,7 +9,7 @@ use nom::{
     multi::many0,
 };
 
-use crate::http::Response;
+use crate::http::{Headers, Response};
 
 fn initial_response_line(input: &str) -> IResult<&str, (u32, String)> {
     let (input, _) = tag("HTTP/1.1")(input)?;
@@ -34,18 +34,29 @@ fn header_line(input: &str) -> IResult<&str, (String, String)> {
 
 pub fn http_response(input: &str) -> IResult<&str, Response> {
     let (input, (code, message)) = initial_response_line(input)?;
-    let (input, headers) = many0(header_line).parse(input)?;
+    let (input, raw_headers) = many0(header_line).parse(input)?;
     let (input, _) = line_ending(input)?;
     let (input, body) = rest(input)?;
 
     let body = (!body.is_empty()).then_some(body.to_string());
+
+    let mut headers = Headers::new();
+    let mut set_cookies = Vec::new();
+    for (key, value) in raw_headers {
+        if key.eq_ignore_ascii_case("set-cookie") {
+            set_cookies.push(value);
+        } else {
+            headers.insert(key, value);
+        }
+    }
 
     Ok((
         input,
         Response {
             code,
             message,
-            headers: headers.into_iter().collect(),
+            headers,
+            set_cookies,
             body,
         },
     ))

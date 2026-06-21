@@ -1,8 +1,10 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 mod parse;
 use anyhow::{Result, anyhow};
 use enum_stringify::EnumStringify;
+use indexmap::IndexMap;
+use scraper::Html;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -10,7 +12,7 @@ use tokio::{
 
 use crate::http::parse::http_response;
 
-type Headers = BTreeMap<String, String>;
+type Headers = IndexMap<String, String>;
 
 #[derive(Debug, EnumStringify)]
 #[enum_stringify(case = "upper")]
@@ -20,13 +22,13 @@ pub enum Method {
 }
 
 const CRLF: &'static str = "\r\n";
-const HTTP_END: &'static str = "\r\n\r\n";
 
 #[derive(Debug)]
 pub struct RequestBuilder {
     method: Method,
     path: String,
     headers: Headers,
+    form_items: String,
 }
 
 impl RequestBuilder {
@@ -35,6 +37,7 @@ impl RequestBuilder {
             method,
             path,
             headers: Headers::new(),
+            form_items: String::new(),
         }
     }
 
@@ -43,27 +46,58 @@ impl RequestBuilder {
         self
     }
 
+    pub fn form_item(mut self, name: &str, value: &str) -> Self {
+        self.headers
+            .entry("Content-Type".to_string())
+            .or_insert("application/x-www-form-urlencoded".to_string());
+
+        let current_content_len = self.form_items.len();
+        let formatted_item = format!(
+            "{}{}={}",
+            if current_content_len > 0 { "&" } else { "" },
+            name,
+            value
+        );
+        self.form_items.push_str(&formatted_item);
+        self.headers
+            .entry("Content-Length".to_string())
+            .and_modify(|s| {
+                *s = self.form_items.len().to_string();
+            })
+            .or_insert(self.form_items.len().to_string());
+        self
+    }
+
     pub async fn send<T>(&self, socket: &mut T) -> Result<Response>
     where
         T: AsyncReadExt + AsyncWriteExt + Unpin,
     {
         let s = self.to_string();
+        eprintln!("=========Sending http request=========\n{}", s);
         socket.write_all(s.as_bytes()).await?;
 
         let mut response_buffer = Vec::with_capacity(2048);
+
+        eprintln!("-------Reading response from socket------");
         let bytes_read = socket.read_buf(&mut response_buffer).await?;
+        if bytes_read == 0 {
+            return Err(anyhow!("Socket disconnected"));
+        }
+
         let mut r = Response::try_from(
-            str::from_utf8(&response_buffer[..bytes_read]).expect("Should be a valid ascii sequence"),
+            str::from_utf8(&response_buffer[..bytes_read])
+                .expect("Should be a valid ascii sequence"),
         )?;
 
-        if let Some(len) = r.content_length() {
+        if let Some(len) = r.content_length() && len > 0 {
             let mut content = Vec::with_capacity(len);
             let bytes_read = socket.read_buf(&mut content).await?;
             if bytes_read == 0 {
                 eprintln!("Damn bro... no bytes...");
-            }
-            else {
-                let result = String::from_utf8(content);
+            } else {
+                while content.len() < len {
+                    socket.read_buf(&mut content).await?;
+                }                let result = String::from_utf8(content);
                 eprintln!("Got bytes {:?}", result);
                 r.body = result.ok();
             }
@@ -84,6 +118,11 @@ impl ToString for RequestBuilder {
             out.push_str(CRLF);
         }
         out.push_str(CRLF);
+
+        if !self.form_items.is_empty() {
+            out.push_str(&self.form_items);
+        }
+
         out
     }
 }
@@ -93,6 +132,7 @@ pub struct Response {
     pub code: u32,
     pub message: String,
     pub headers: Headers,
+    pub set_cookies: Vec<String>,
     pub body: Option<String>,
 }
 
@@ -113,13 +153,42 @@ impl Response {
 
         v.parse().ok()
     }
+
+    pub fn html_body(&self) -> Result<Html> {
+        if let Some(body) = self.body.as_ref() {
+            let d = Html::parse_document(body);
+            Ok(d)
+        } else {
+            Err(anyhow!("HTTP response has no body"))
+        }
+    }
+
+    pub fn cookies(&self) -> String {
+        self.set_cookies
+            .iter()
+            .map(|c| c.split(';').next().unwrap_or(c).trim())
+            .fold(String::new(), |mut s, pair| {
+                if !s.is_empty() {
+                    s.push_str("; ");
+                }
+                s.push_str(pair);
+                s
+            })
+    }
+
+    pub fn is_chunked(&self) -> bool {
+        // Transfer-Encoding can be a list like "gzip, chunked"
+        self.headers.get("transfer-encoding")
+            .is_some_and(|v| v.split(',').any(|t| t.trim().eq_ignore_ascii_case("chunked")))
+    }
 }
 
 #[cfg(test)]
 mod test {
-    use std::collections::BTreeMap;
 
-    use crate::http::Response;
+    use indexmap::IndexMap;
+
+use crate::http::Response;
 
     #[test]
     fn parse_response() {
@@ -141,7 +210,8 @@ another-footer: another-value"#;
             Response {
                 code: 200,
                 message: "OK".to_string(),
-                headers: BTreeMap::from([
+                set_cookies: vec![],
+                headers: IndexMap::from([
                     (
                         "Date".to_string(),
                         "Fri, 31 Dec 1999 23:59:59 GMT".to_string()
