@@ -9,15 +9,14 @@ if expand('%') == '' && !&modified && line('$') <= 1 && getline(1) == ''
 endif
 let s:shortmess_save = &shortmess
 set shortmess+=aoO
-badd +212 src/http.rs
-badd +24 ~/project5/src/crawler.rs
-badd +83 src/main.rs
+badd +158 src/http.rs
+badd +100 ~/project5/src/http/parse.rs
 argglobal
 %argdel
 $argadd src/http.rs
-edit src/main.rs
+edit ~/project5/src/http/parse.rs
 argglobal
-balt ~/project5/src/crawler.rs
+balt src/http.rs
 setlocal foldmethod=manual
 setlocal foldexpr=0
 setlocal foldmarker={{{,}}}
@@ -28,12 +27,12 @@ setlocal foldnestmax=20
 setlocal foldenable
 silent! normal! zE
 let &fdl = &fdl
-let s:l = 83 - ((19 * winheight(0) + 17) / 35)
+let s:l = 56 - ((11 * winheight(0) + 17) / 35)
 if s:l < 1 | let s:l = 1 | endif
 keepjumps exe s:l
 normal! zt
-keepjumps 83
-normal! 047|
+keepjumps 56
+normal! 019|
 tabnext 1
 if exists('s:wipebuf') && len(win_findbuf(s:wipebuf)) == 0 && getbufvar(s:wipebuf, '&buftype') isnot# 'terminal'
   silent exe 'bwipe ' . s:wipebuf

@@ -20,6 +20,7 @@ use crate::{
 mod crawler;
 mod http;
 
+/// CLI Args for the program
 #[derive(Parser)]
 struct P5Args {
     #[arg(short = 's', default_value = "fakebook.khoury.northeastern.edu")]
@@ -33,6 +34,7 @@ struct P5Args {
     password: String,
 }
 
+/// Submits the login form, then takes the acquired cookies and begins the crawler
 async fn start<T>(mut socket: T, args: &P5Args, is_tls: bool) -> Result<()>
 where
     T: AsyncReadExt + AsyncWriteExt + Unpin,
@@ -41,7 +43,6 @@ where
         .header("Host", &args.server)
         .send(&mut socket)
         .await?;
-    // eprintln!("{:#?}", login_res);
     let login_page = login_res.html_body()?;
 
     let selector = Selector::parse("input[name=\"csrfmiddlewaretoken\"]")
@@ -100,6 +101,7 @@ where
     Ok(())
 }
 
+/// Constructs a TCP socket wrapped in TLS.
 pub async fn make_tls() -> Result<impl AsyncWriteExt + AsyncReadExt + Unpin> {
     let args = P5Args::parse();
     let host_and_port = format!("{}:{}", args.server, args.port);
@@ -116,18 +118,20 @@ pub async fn make_tls() -> Result<impl AsyncWriteExt + AsyncReadExt + Unpin> {
     Ok(socket)
 }
 
+/// Constructs a regular tcp socket not wrapped in TLS
 pub async fn make_tcp() -> Result<TcpStream> {
     let args = P5Args::parse();
     let host_and_port = format!("{}:{}", args.server, args.port);
     let socket = TcpStream::connect(&host_and_port).await?;
     Ok(socket)
-    // start(socket, &args).await?;
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = P5Args::parse();
     let host_and_port = format!("{}:{}", args.server, args.port);
+
+    // decide whether to use TLS or not based on the provided port
     if args.port == 443 {
         let mut roots = RootCertStore::empty();
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());

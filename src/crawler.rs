@@ -4,7 +4,7 @@ use std::{
     collections::{HashSet, VecDeque},
     time::Duration,
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 
 use crate::{
     http::{Method, RequestBuilder},
@@ -100,7 +100,7 @@ impl Crawler {
             .map_err(|e| anyhow!("Couldn't make flag selector {e}"))?;
         for secret_flag in doc.select(&flag_selector) {
             for text in secret_flag.text() {
-                println!("{}", text);
+                println!("{}", text.replace("FLAG: ", ""));
             }
         }
 

@@ -9,8 +9,15 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::http::parse::http_response;
 
+/// Type alias for an ordered key-value structure that represents HTTP headers
 type Headers = IndexMap<String, String>;
+pub fn header_has(h: &Headers, k: &str, v: &str) -> bool {
+    let lowercase_key = k.to_lowercase();
+    let checkvalue = |s: &String| -> bool { s.eq_ignore_ascii_case(v) };
+    h.get(k).is_some_and(checkvalue) || h.get(&lowercase_key).is_some_and(checkvalue)
+}
 
+/// Simple stringifiable enum that can be turned into uppercased HTTP methods
 #[derive(Debug, EnumStringify)]
 #[enum_stringify(case = "upper")]
 pub enum Method {
@@ -20,6 +27,7 @@ pub enum Method {
 
 const CRLF: &'static str = "\r\n";
 
+/// Builder pattern object that serializes into an HTTP request.
 #[derive(Debug)]
 pub struct RequestBuilder {
     method: Method,
@@ -38,11 +46,13 @@ impl RequestBuilder {
         }
     }
 
+    /// Adds a header to the request.
     pub fn header(mut self, key: &str, value: &str) -> Self {
         self.headers.insert(key.to_string(), value.to_string());
         self
     }
 
+    /// Adds an item to a form for a POST request.
     pub fn form_item(mut self, name: &str, value: &str) -> Self {
         self.headers
             .entry("Content-Type".to_string())
@@ -65,6 +75,7 @@ impl RequestBuilder {
         self
     }
 
+    /// Writes this request to a socket, then reads the socket until it gets the full response.
     pub async fn send<T>(&self, socket: &mut T) -> Result<Response>
     where
         T: AsyncReadExt + AsyncWriteExt + Unpin,
@@ -83,7 +94,6 @@ impl RequestBuilder {
 
         let response_str = str::from_utf8(&response_buffer[..bytes_read])
             .expect("Should be a valid ascii sequence");
-        // eprintln!("{}", response_str);
 
         let mut r = Response::try_from(response_str)?;
 
@@ -97,17 +107,27 @@ impl RequestBuilder {
 
         if let Some(len) = r.content_length()
             && len > 0
+            && r.body.is_none()
         {
-            let mut content = Vec::with_capacity(len);
-            let bytes_read = socket.read_buf(&mut content).await?;
-            if bytes_read == 0 {
-                eprintln!("Disconnected, need {len} bytes");
-            } else {
-                if let Ok(result) = String::from_utf8(content) {
-                    // eprintln!("{}", result);
-                    r.body = Some(result);
+            let mut body_buf = Vec::with_capacity(len);
+            while body_buf.len() < len {
+                let bytes_read = socket.read_buf(&mut body_buf).await?;
+                if bytes_read == 0 {
+                    return Err(anyhow!(
+                        "Socket disconnected. Buffer has {} bytes",
+                        body_buf.len()
+                    ));
                 }
             }
+            r.body = Some(String::from_utf8(body_buf).expect("Couldn't turn body into string"));
+            // let bytes_read = socket.read_buf(&mut body_buf).await?;
+            // if bytes_read == 0 {
+            //     eprintln!("Disconnected, need {len} bytes");
+            // } else {
+            //     if let Ok(result) = String::from_utf8(body_buf) {
+            //         r.body = Some(result);
+            //     }
+            // }
         }
 
         Ok(r)
@@ -189,11 +209,7 @@ impl Response {
     }
 
     pub fn is_chunked(&self) -> bool {
-        // Transfer-Encoding can be a list like "gzip, chunked"
-        self.headers.get("transfer-encoding").is_some_and(|v| {
-            v.split(',')
-                .any(|t| t.trim().eq_ignore_ascii_case("chunked"))
-        })
+        header_has(&self.headers, "Transfer-Encoding", "chunked")
     }
 }
 
@@ -204,22 +220,18 @@ mod test {
 
     use indexmap::IndexMap;
 
-    use crate::http::Response;
+    use crate::http::{Headers, Response};
 
     #[test]
     fn parse_response() {
         let input = r#"HTTP/1.1 200 OK
 Date: Fri, 31 Dec 1999 23:59:59 GMT
 Content-Type: text/plain
-Transfer-Encoding: chunked
-
-1a; ignore-stuff-here
-abcdefghijklmnopqrstuvwxyz
-10
-1234567890abcdef
-0
+Content-Length: 42
 some-footer: some-value
-another-footer: another-value"#;
+another-footer: another-value
+
+abcdefghijklmnopqrstuvwxyz1234567890abcdef"#;
 
         assert_eq!(
             Response::try_from(input).unwrap(),
@@ -233,18 +245,50 @@ another-footer: another-value"#;
                         "Fri, 31 Dec 1999 23:59:59 GMT".to_string()
                     ),
                     ("Content-Type".to_string(), "text/plain".to_string()),
-                    ("Transfer-Encoding".to_string(), "chunked".to_string())
+                    ("Content-Length".to_string(), "42".to_string()),
+                    ("some-footer".to_string(), "some-value".to_string()),
+                    ("another-footer".to_string(), "another-value".to_string()),
                 ]),
-                body: Some(
-                    r#"1a; ignore-stuff-here
+                body: Some(r#"abcdefghijklmnopqrstuvwxyz1234567890abcdef"#.to_string())
+            }
+        );
+    }
+
+    #[test]
+    fn chunked_encoding() {
+        let input = r#"HTTP/1.1 200 OK
+Date: Fri, 31 Dec 1999 23:59:59 GMT
+Content-Type: text/plain
+Transfer-Encoding: chunked
+
+1a; ignore-stuff-here
 abcdefghijklmnopqrstuvwxyz
 10
 1234567890abcdef
 0
 some-footer: some-value
-another-footer: another-value"#
-                        .to_string()
-                )
+another-footer: another-value"#;
+
+        let response = Response::try_from(input).unwrap();
+        assert!(response.is_chunked());
+
+        assert_eq!(
+            response,
+            Response {
+                code: 200,
+                message: "OK".to_string(),
+                set_cookies: HashMap::new(),
+                headers: [
+                    ("Date", "Fri, 31 Dec 1999 23:59:59 GMT"),
+                    ("Content-Type", "text/plain"),
+                    ("Transfer-Encoding", "chunked"),
+                    ("some-footer", "some-value"),
+                    ("another-footer", "another-value"),
+                ]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+                body: Some("abcdefghijklmnopqrstuvwxyz1234567890abcdef".to_string()),
             }
         );
     }
