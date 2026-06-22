@@ -8,7 +8,7 @@ use tokio::{
     net::TcpStream,
 };
 use tokio_rustls::{
-    TlsConnector, TlsStream,
+    TlsConnector,
     rustls::{ClientConfig, RootCertStore, pki_types::ServerName},
 };
 
@@ -58,7 +58,7 @@ where
     };
 
     let cookies = login_res.cookies();
-    let logged_in_res = RequestBuilder::new(Method::Post, "/accounts/login".to_string())
+    let logged_in_res = RequestBuilder::new(Method::Post, "/accounts/login/".to_string())
         .header("Host", &args.server)
         .header(
             "Referer",
@@ -73,10 +73,11 @@ where
         .await?;
     eprintln!("{:#?}", logged_in_res);
 
-    let mut crawler = Crawler::new(&cookies, &args.server);
+    socket.shutdown().await?;
+    let mut crawler = Crawler::new(&logged_in_res.cookies(), &args.server);
     if is_tls {
         crawler
-            .visit(
+            .scan(
                 true,
                 logged_in_res
                     .headers
@@ -86,8 +87,8 @@ where
             .await?;
     } else {
         crawler
-            .visit(
-                true,
+            .scan(
+                false,
                 logged_in_res
                     .headers
                     .get("location")

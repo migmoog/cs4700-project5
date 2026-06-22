@@ -1,14 +1,11 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 mod parse;
 use anyhow::{Result, anyhow};
 use enum_stringify::EnumStringify;
 use indexmap::IndexMap;
 use scraper::Html;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::http::parse::http_response;
 
@@ -73,33 +70,43 @@ impl RequestBuilder {
         T: AsyncReadExt + AsyncWriteExt + Unpin,
     {
         let s = self.to_string();
-        eprintln!("=========Sending http request=========\n{}", s);
+        // eprintln!("=========Sending http request=========\n{}", s);
         socket.write_all(s.as_bytes()).await?;
 
         let mut response_buffer = Vec::with_capacity(2048);
 
-        eprintln!("-------Reading response from socket------");
+        // eprintln!("-------Reading response from socket------");
         let bytes_read = socket.read_buf(&mut response_buffer).await?;
         if bytes_read == 0 {
             return Err(anyhow!("Socket disconnected"));
         }
 
-        let mut r = Response::try_from(
-            str::from_utf8(&response_buffer[..bytes_read])
-                .expect("Should be a valid ascii sequence"),
-        )?;
+        let response_str = str::from_utf8(&response_buffer[..bytes_read])
+            .expect("Should be a valid ascii sequence");
+        // eprintln!("{}", response_str);
 
-        if let Some(len) = r.content_length() && len > 0 {
+        let mut r = Response::try_from(response_str)?;
+
+        if r.should_keep_alive() {
+            eprintln!("SHOULD KEEP THIS ALIVE");
+        }
+
+        if r.code == 503 {
+            return Ok(r);
+        }
+
+        if let Some(len) = r.content_length()
+            && len > 0
+        {
             let mut content = Vec::with_capacity(len);
             let bytes_read = socket.read_buf(&mut content).await?;
             if bytes_read == 0 {
-                eprintln!("Damn bro... no bytes...");
+                eprintln!("Disconnected, need {len} bytes");
             } else {
-                while content.len() < len {
-                    socket.read_buf(&mut content).await?;
-                }                let result = String::from_utf8(content);
-                eprintln!("Got bytes {:?}", result);
-                r.body = result.ok();
+                if let Ok(result) = String::from_utf8(content) {
+                    // eprintln!("{}", result);
+                    r.body = Some(result);
+                }
             }
         }
 
@@ -132,7 +139,7 @@ pub struct Response {
     pub code: u32,
     pub message: String,
     pub headers: Headers,
-    pub set_cookies: Vec<String>,
+    pub set_cookies: HashMap<String, String>,
     pub body: Option<String>,
 }
 
@@ -150,7 +157,6 @@ impl<'a> TryFrom<&'a str> for Response {
 impl Response {
     pub fn content_length(&self) -> Option<usize> {
         let v = self.headers.get("content-length")?;
-
         v.parse().ok()
     }
 
@@ -166,29 +172,39 @@ impl Response {
     pub fn cookies(&self) -> String {
         self.set_cookies
             .iter()
-            .map(|c| c.split(';').next().unwrap_or(c).trim())
+            .map(|(ck, cv)| format!("{ck}={cv}"))
             .fold(String::new(), |mut s, pair| {
                 if !s.is_empty() {
                     s.push_str("; ");
                 }
-                s.push_str(pair);
+                s.push_str(&pair);
                 s
             })
     }
 
+    pub fn should_keep_alive(&self) -> bool {
+        self.headers
+            .get("connection")
+            .is_some_and(|e| e.eq_ignore_ascii_case("keep-alive"))
+    }
+
     pub fn is_chunked(&self) -> bool {
         // Transfer-Encoding can be a list like "gzip, chunked"
-        self.headers.get("transfer-encoding")
-            .is_some_and(|v| v.split(',').any(|t| t.trim().eq_ignore_ascii_case("chunked")))
+        self.headers.get("transfer-encoding").is_some_and(|v| {
+            v.split(',')
+                .any(|t| t.trim().eq_ignore_ascii_case("chunked"))
+        })
     }
 }
 
 #[cfg(test)]
 mod test {
 
+    use std::collections::HashMap;
+
     use indexmap::IndexMap;
 
-use crate::http::Response;
+    use crate::http::Response;
 
     #[test]
     fn parse_response() {
@@ -210,7 +226,7 @@ another-footer: another-value"#;
             Response {
                 code: 200,
                 message: "OK".to_string(),
-                set_cookies: vec![],
+                set_cookies: HashMap::new(),
                 headers: IndexMap::from([
                     (
                         "Date".to_string(),
