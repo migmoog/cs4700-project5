@@ -84,7 +84,7 @@ impl RequestBuilder {
         // eprintln!("=========Sending http request=========\n{}", s);
         socket.write_all(s.as_bytes()).await?;
 
-        let mut response_buffer = Vec::with_capacity(2048);
+        let mut response_buffer = Vec::with_capacity(4098);
 
         // eprintln!("-------Reading response from socket------");
         let bytes_read = socket.read_buf(&mut response_buffer).await?;
@@ -120,14 +120,16 @@ impl RequestBuilder {
                 }
             }
             r.body = Some(String::from_utf8(body_buf).expect("Couldn't turn body into string"));
-            // let bytes_read = socket.read_buf(&mut body_buf).await?;
-            // if bytes_read == 0 {
-            //     eprintln!("Disconnected, need {len} bytes");
-            // } else {
-            //     if let Ok(result) = String::from_utf8(body_buf) {
-            //         r.body = Some(result);
-            //     }
-            // }
+        } else if r.is_chunked() {
+            loop {
+                // take until we disconnect
+                let bytes_read = socket.read_buf(&mut response_buffer).await?;
+                if bytes_read == 0 {
+                    break;
+                }
+            }
+
+            r = Response::try_from(str::from_utf8(&response_buffer).unwrap())?;
         }
 
         Ok(r)
@@ -213,6 +215,7 @@ impl Response {
     }
 }
 
+// tests for parsing HTTP responses
 #[cfg(test)]
 mod test {
 
