@@ -1,4 +1,5 @@
 use anyhow::{Result, anyhow};
+use indexmap::IndexSet;
 use scraper::{Html, Selector};
 use std::{
     collections::{HashSet, VecDeque},
@@ -13,7 +14,7 @@ use crate::{
 
 pub struct Crawler {
     visited_urls: HashSet<String>,
-    trips_queue: VecDeque<String>,
+    trips_queue: IndexSet<String>,
     cookies: String,
     server: String,
 }
@@ -22,15 +23,15 @@ impl Crawler {
     pub fn new(cookies: &str, server: &str) -> Self {
         Self {
             visited_urls: HashSet::from(["/accounts/login/".to_string()]),
-            trips_queue: VecDeque::new(),
+            trips_queue: IndexSet::new(),
             cookies: cookies.to_string(),
             server: server.to_string(),
         }
     }
 
     pub async fn scan(&mut self, is_tls: bool, initial_path: &str) -> Result<()> {
-        self.trips_queue.push_back(initial_path.to_string());
-        while let Some(path) = self.trips_queue.pop_front() {
+        self.trips_queue.insert(initial_path.to_string());
+        while let Some(path) = self.trips_queue.shift_remove_index(0) {
             self.visit(is_tls, &path).await?;
         }
 
@@ -48,6 +49,7 @@ impl Crawler {
             // eprintln!("Already visited {path}");
             return Ok(());
         } else {
+            self.trips_queue.shift_remove(path);
             self.visited_urls.insert(path.to_string());
         }
 
@@ -114,10 +116,10 @@ impl Crawler {
             Selector::parse("a").map_err(|e| anyhow!("Couldn't make link selector {e}"))?;
         for link in doc.select(&link_selector).map(|e| e.attr("href")) {
             if let Some(url) = link {
-                if self.visited_urls.contains(url) {
+                if self.visited_urls.contains(url) || self.trips_queue.contains(url) {
                     continue;
                 }
-                self.trips_queue.push_back(url.to_string());
+                self.trips_queue.insert(url.to_string());
             }
         }
 

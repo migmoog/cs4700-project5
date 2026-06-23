@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{Result, anyhow};
 use clap::Parser;
@@ -76,26 +76,30 @@ where
 
     socket.shutdown().await?;
     let mut crawler = Crawler::new(&logged_in_res.cookies(), &args.server);
-    if is_tls {
-        crawler
-            .scan(
+    match tokio::time::timeout(
+        Duration::from_mins(15),
+        if is_tls {
+            crawler.scan(
                 true,
                 logged_in_res
                     .headers
                     .get("location")
                     .expect("Should have a location"),
             )
-            .await?;
-    } else {
-        crawler
-            .scan(
+        } else {
+            crawler.scan(
                 false,
                 logged_in_res
                     .headers
                     .get("location")
                     .expect("Should have a location"),
             )
-            .await?;
+        },
+    )
+    .await
+    {
+        Ok(Err(e)) => return Err(e),
+        _ => {}
     }
 
     Ok(())
