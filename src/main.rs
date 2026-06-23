@@ -72,7 +72,7 @@ where
         .form_item("next", "")
         .send(&mut socket)
         .await?;
-    eprintln!("{:#?}", logged_in_res);
+    // eprintln!("{:#?}", logged_in_res);
 
     socket.shutdown().await?;
     let mut crawler = Crawler::new(&logged_in_res.cookies(), &args.server);

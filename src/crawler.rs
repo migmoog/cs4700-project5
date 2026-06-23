@@ -39,13 +39,13 @@ impl Crawler {
 
     pub async fn visit(&mut self, is_tls: bool, path: &str) -> Result<()> {
         if !path.starts_with("/") {
-            eprintln!("skipping {path}");
+            // eprintln!("skipping {path}");
             return Ok(());
         } else if path.contains("accounts") {
             // eprintln!("Session related link \"{}\". Ignoring", path);
             return Ok(());
         } else if self.visited_urls.contains(path) {
-            eprintln!("Already visited {path}");
+            // eprintln!("Already visited {path}");
             return Ok(());
         } else {
             self.visited_urls.insert(path.to_string());
@@ -69,7 +69,7 @@ impl Crawler {
         let out = match response.code {
             200 => {
                 let doc = response.html_body()?;
-                eprintln!("200: collecting links");
+                // eprintln!("200: collecting links");
                 self.collect_links(doc)
             }
 
@@ -78,19 +78,25 @@ impl Crawler {
                 let Some(location) = response.headers.get("location") else {
                     return Err(anyhow!("Got a 302 without a location"));
                 };
-                eprintln!("302: redirected to {}", location);
+                // eprintln!("302: redirected to {}", location);
                 Box::pin(self.visit(is_tls, location)).await
             }
 
             503 => {
-                eprintln!("503: Waiting like a good lad");
+                // eprintln!("503: Waiting like a good lad");
                 tokio::time::sleep(Duration::from_secs(2)).await;
-                self.collect_links(response.html_body()?)
+                // self.collect_links(response.html_body()?)
+                if let Ok(doc) = response.html_body() {
+                    self.collect_links(doc)
+                } else {
+                    // eprintln!("{:#?}", response);
+                    Ok(())
+                }
             }
 
             c => panic!("Got an unhandled code: {c}"),
         };
-        eprintln!("Finished visiting {path}");
+        // eprintln!("Finished visiting {path}");
         out
     }
 
